@@ -3,7 +3,7 @@ from pathlib import Path
 from tilse.data.timelines import Timeline as TilseTimeline
 from tilse.data.timelines import GroundTruth as TilseGroundTruth
 from tilse.evaluation import rouge
-from news_tls import utils, data, datewise, clust, summarizers
+from news_tls import utils, data, datewise, clust, summarizers, agentic_clust
 from pprint import pprint
 
 
@@ -178,6 +178,15 @@ def main(args):
             cluster_ranker=cluster_ranker,
             clusterer=clusterer,
             summarizer=summarizer,
+            clip_sents=5,
+            unique_dates=True,
+        )
+    elif args.method == 'agentic_clust':
+        cluster_ranker = clust.ClusterDateMentionCountRanker()
+        clusterer = clust.TemporalMarkovClusterer()
+        system = agentic_clust.AgenticClusteringTimelineGenerator(
+            cluster_ranker=cluster_ranker,
+            clusterer=clusterer,
             clip_sents=5,
             unique_dates=True,
         )
