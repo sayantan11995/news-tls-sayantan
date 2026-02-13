@@ -10,6 +10,9 @@ classical clustering method with a multi-agent LLM pipeline:
 4. Summary Verification  - Verify against source material
 5. Timeline Finalization - Construct coherent timeline from verified summaries
 
+Requires Ollama running locally with the llama3.1:8b model pulled:
+    ollama pull llama3.1:8b
+
 Usage:
     python experiments/evaluate.py \
         --dataset $DATASETS/t17 \
@@ -178,8 +181,12 @@ class AgenticClusteringTimelineGenerator:
         self.max_iterations = max_iterations
 
         if llm is None:
-            from langchain_openai import ChatOpenAI
-            self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+            from langchain_ollama import ChatOllama
+            self.llm = ChatOllama(
+                model="llama3.1:8b",
+                temperature=0.2,
+                format="json",   # force JSON output for reliability
+            )
         else:
             self.llm = llm
 
@@ -254,6 +261,31 @@ class AgenticClusteringTimelineGenerator:
 
         return None
 
+    def _invoke_llm_json(self, prompt: str, retries: int = 2):
+        """Call the LLM and parse the response as JSON.
+
+        Smaller open-source models (e.g. Llama-3.1-8B) occasionally produce
+        malformed JSON on the first attempt.  This helper retries up to
+        *retries* times, re-prompting the model to fix its output.
+        """
+        response = self.llm.invoke([HumanMessage(content=prompt)])
+        parsed = self._parse_llm_json(response.content)
+        if parsed is not None:
+            return parsed
+
+        for _ in range(retries):
+            fix_prompt = (
+                "Your previous response was not valid JSON.  "
+                "Please respond again with ONLY valid JSON and nothing else.\n\n"
+                + prompt
+            )
+            response = self.llm.invoke([HumanMessage(content=fix_prompt)])
+            parsed = self._parse_llm_json(response.content)
+            if parsed is not None:
+                return parsed
+
+        return None
+
     # ------------------------------------------------------------------
     # LangGraph nodes
     # ------------------------------------------------------------------
@@ -268,11 +300,16 @@ class AgenticClusteringTimelineGenerator:
             "Classify this topic into exactly ONE of these categories:\n"
             "  disaster, conflict, organization, person, political,\n"
             "  science, legal, health, general\n\n"
-            "Respond with ONLY the category name, nothing else."
+            'Return ONLY valid JSON: {"category": "<name>"}'
         )
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-        topic_type = response.content.strip().lower().split()[0]
+        parsed = self._invoke_llm_json(prompt)
+        if parsed and "category" in parsed:
+            topic_type = parsed["category"].strip().lower().split()[0]
+        else:
+            # Last-resort fallback: ask without JSON constraint
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            topic_type = response.content.strip().lower().split()[0]
 
         if topic_type not in TOPIC_CRITERIA:
             topic_type = "general"
@@ -332,8 +369,7 @@ class AgenticClusteringTimelineGenerator:
                 '}'
             )
 
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            parsed = self._parse_llm_json(response.content)
+            parsed = self._invoke_llm_json(prompt)
 
             if parsed and "extractive" in parsed and "abstractive" in parsed:
                 candidate_summaries[date_str] = [
@@ -403,8 +439,7 @@ class AgenticClusteringTimelineGenerator:
                 '}'
             )
 
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            parsed = self._parse_llm_json(response.content)
+            parsed = self._invoke_llm_json(prompt)
 
             if parsed and "selected_candidate" in parsed:
                 idx = parsed["selected_candidate"] - 1
@@ -470,8 +505,7 @@ class AgenticClusteringTimelineGenerator:
                 "only if correction is needed; otherwise null."
             )
 
-            response = self.llm.invoke([HumanMessage(content=prompt)])
-            parsed = self._parse_llm_json(response.content)
+            parsed = self._invoke_llm_json(prompt)
 
             if parsed:
                 is_verified = parsed.get("verified", True)
@@ -577,8 +611,7 @@ class AgenticClusteringTimelineGenerator:
             '}'
         )
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-        parsed = self._parse_llm_json(response.content)
+        parsed = self._invoke_llm_json(prompt)
 
         if parsed and "timeline" in parsed:
             timeline_items = [
